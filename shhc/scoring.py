@@ -14,7 +14,7 @@ def score(findings: list[Finding]) -> int:
     Les poids totalisent 100, donc cette somme EST le score sur 100 :
     aucune normalisation n'est necessaire.
     """
-    raise NotImplementedError("MVP 3")
+    return sum(f.points for f in findings)
 
 
 def grade(score_value: int) -> str:
@@ -23,7 +23,16 @@ def grade(score_value: int) -> str:
     Seuils : >=90 A, >=80 B, >=70 C, >=60 D, sinon F.
     Attention aux bornes : 90 doit donner A, 89 doit donner B.
     """
-    raise NotImplementedError("MVP 3")
+    if score_value >= 90:
+        return "A"
+    elif score_value >= 80:
+        return "B"
+    elif score_value >= 70:
+        return "C"
+    elif score_value >= 60:
+        return "D"
+    else:
+        return "F"
 
 
 def exit_code(grade_value: str) -> int:
@@ -32,4 +41,9 @@ def exit_code(grade_value: str) -> int:
     0 pour A ou B, 1 pour C ou D, 2 pour F.
     Les erreurs reseau renvoient aussi 2, mais c'est `cli` qui s'en charge.
     """
-    raise NotImplementedError("MVP 3")
+    if grade_value in ("A", "B"):
+        return 0
+    elif grade_value in ("C", "D"):
+        return 1
+    else:
+        return 2

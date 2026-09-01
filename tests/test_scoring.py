@@ -9,7 +9,7 @@ import pytest
 from shhc import scoring
 from shhc.models import WEIGHTS, Finding
 
-pytestmark = pytest.mark.xfail(reason="MVP 3 pas encore implemente", strict=False)
+
 
 
 def _finding(header: str, status: str, points: int) -> Finding:

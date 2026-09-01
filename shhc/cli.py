@@ -41,10 +41,6 @@ def check(
     except fetch.FetchError as exc:
         err_console.print(f"[red]Impossible d'atteindre {target} :[/red] {exc}")
         raise typer.Exit(code=2)
-    except NotImplementedError as exc:
-        # TODO: retirer ce garde-fou une fois les MVP 1 a 4 termines.
-        err_console.print(f"[yellow]Pas encore implemente ({exc}).[/yellow] Cible : {target}")
-        raise typer.Exit(code=2)
 
     findings = rules.analyze(headers)
     score_value = scoring.score(findings)
