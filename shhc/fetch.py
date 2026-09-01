@@ -49,11 +49,6 @@ def fetch(url: str) -> tuple[str, dict[str, str]]:
     Raises:
         FetchError: probleme reseau, DNS, TLS ou timeout.
     """
-    # TODO(MVP 1): httpx.get(url, follow_redirects=True, timeout=TIMEOUT,
-    #   headers={"User-Agent": USER_AGENT}) puis
-    #   {k.lower(): v for k, v in response.headers.items()}
-    #   Attraper httpx.RequestError -> FetchError avec un message clair.
-    #   Ne PAS lever sur un statut 4xx/5xx : un 403 a lui aussi des en-tetes.
     try:
         request = httpx.get(url, 
 follow_redirects=True, timeout=TIMEOUT,

@@ -95,16 +95,115 @@ Utilisable directement comme portail de qualité :
 shhc https://mon-site.com || echo "en-tetes insuffisants"
 ```
 
+## Version web et API
+
+Le même moteur est exposé en HTTP : une page à remplir et un point d'entrée
+JSON. La logique métier n'est pas dupliquée — `api.py` réutilise `fetch`,
+`rules` et `scoring`, exactement comme la CLI.
+
+### Lancer en local
+
+```bash
+pip install -r requirements.txt
+uvicorn shhc.api:app --reload
+```
+
+Puis http://127.0.0.1:8000 pour la page, http://127.0.0.1:8000/docs pour la
+documentation interactive de l'API, générée automatiquement par FastAPI.
+
+### Les points d'entrée
+
+| Route | Réponse |
+|---|---|
+| `GET /` | la page web |
+| `GET /api/check?url=<url>` | le rapport en JSON |
+| `GET /api/health` | sonde de disponibilité |
+| `GET /docs` | documentation OpenAPI interactive |
+
+```bash
+curl "https://<votre-service>.onrender.com/api/check?url=mozilla.org"
+```
+
+```json
+{
+  "url": "https://www.mozilla.org/",
+  "score": 80,
+  "grade": "B",
+  "exit_code": 0,
+  "findings": [
+    {
+      "header": "Strict-Transport-Security",
+      "status": "ok",
+      "value": "max-age=31536000",
+      "weight": 30,
+      "points": 30,
+      "reason": "Directive `max-age` correcte : 31536000.",
+      "recommendation": null
+    }
+  ]
+}
+```
+
+Codes HTTP : `400` URL invalide ou cible refusée · `429` quota dépassé ·
+`502` site injoignable.
+
+### Protections de la version publique
+
+Un service qui va chercher une URL fournie par un visiteur est une porte
+d'entrée vers le réseau interne de l'hébergeur. Deux garde-fous :
+
+**Anti-SSRF** (`shhc/guards.py`) — le nom de domaine est résolu avant la
+requête, et toute adresse non publique est refusée : bouclage, plages privées,
+lien-local. Sans ce contrôle, un visiteur pourrait faire interroger
+`http://169.254.169.254/` — les métadonnées du fournisseur cloud, qui
+contiennent souvent des identifiants — par notre propre serveur.
+
+**Quota** — 20 analyses par IP et par minute, en fenêtre glissante. Chaque
+appel déclenche une requête sortante : sans limite, le service peut servir de
+relais pour marteler un tiers.
+
+*Limite connue :* le contrôle anti-SSRF résout le nom, puis httpx le résout à
+nouveau. Un attaquant contrôlant un serveur DNS pourrait renvoyer une adresse
+publique au premier appel et une adresse privée au second (*DNS rebinding*).
+Fermer cette fenêtre demande de résoudre une seule fois et de se connecter à
+l'IP validée.
+
+## Déploiement sur Render.com
+
+Le fichier [`render.yaml`](render.yaml) décrit le service. Deux façons de
+procéder :
+
+**Avec le blueprint** — sur Render.com, *New* → *Blueprint*, sélectionner ce
+dépôt. Tout est lu depuis `render.yaml`, il n'y a rien à saisir.
+
+**À la main** — *New* → *Web Service*, puis :
+
+| Champ | Valeur |
+|---|---|
+| Runtime | Python 3 |
+| Build command | `pip install -r requirements.txt` |
+| Start command | `uvicorn shhc.api:app --host 0.0.0.0 --port $PORT` |
+| Health check path | `/api/health` |
+
+`$PORT` est fourni par Render.com : il faut l'utiliser tel quel, un port en dur
+empêche le service de démarrer. `--host 0.0.0.0` est également obligatoire —
+avec l'adresse par défaut, le conteneur n'accepterait aucune connexion externe.
+
+Sur le plan gratuit, le service s'endort après quinze minutes d'inactivité et
+met une trentaine de secondes à redémarrer à la visite suivante.
+
 ## Stack technique
 
-**Python 3.11** (compatible 3.10+). Le projet n'utilise aucune dépendance
-lourde : quatre bibliothèques, chacune pour une raison précise.
+**Python 3.11** (compatible 3.10+). Aucune dependance lourde : chaque
+bibliotheque repond a un besoin precis.
 
 | Rôle | Bibliothèque | Version | Pourquoi celle-ci |
 |---|---|---|---|
 | Client HTTP | [httpx](https://www.python-httpx.org/) | 0.28 | suivi de redirections explicite, timeouts par défaut, API moderne |
 | Affichage terminal | [rich](https://rich.readthedocs.io/) | 15.0 | tables, panneaux et couleurs sans gérer les codes ANSI à la main |
 | Interface CLI | [typer](https://typer.tiangolo.com/) | 0.27 | les options se déclarent par annotations de type, `--help` généré |
+| API web | [fastapi](https://fastapi.tiangolo.com/) | 0.141 | validation par annotations, documentation OpenAPI generee |
+| Serveur ASGI | [uvicorn](https://www.uvicorn.org/) | 0.52 | serveur de production leger, attendu par Render.com |
 | Tests | [pytest](https://docs.pytest.org/) | 9.1 | paramétrage des cas, sortie d'échec lisible |
 | Simulation HTTP | [respx](https://lundberg.github.io/respx/) | 0.23 | intercepte les requêtes httpx : la suite tourne sans réseau |
 
@@ -143,6 +242,10 @@ shhc/
   scoring.py    somme pondérée -> score + grade               37
   render.py     table Rich, panel de note, recommandations   100
   cli.py        orchestration et codes de sortie              46
+  api.py        API HTTP + page web (FastAPI)                 60
+  guards.py     garde-fou anti-SSRF                           25
+web/
+  index.html    la page, sans dependance externe
 ```
 
 ### Le flux
@@ -184,7 +287,7 @@ class Finding:
 **Les modules purs d'abord.** `rules.py` et `scoring.py` ne font ni réseau ni
 affichage : une fonction reçoit un dictionnaire, renvoie un objet. Ils
 constituent 311 des 548 lignes du paquet et se testent sans simuler quoi que ce
-soit — d'où les 61 tests qui s'exécutent en moins de 3 secondes.
+soit — d'ou les 80 tests qui s'executent en quelques secondes.
 
 **La normalisation en un seul endroit.** Les en-têtes HTTP étant insensibles à
 la casse, `fetch.py` met toutes les clés en minuscules à la sortie de la
@@ -195,7 +298,7 @@ lieu que chaque règle teste plusieurs orthographes.
 
 ```bash
 pip install -r requirements-dev.txt
-pytest                                    # toute la suite : 61 tests
+pytest                                    # toute la suite : 80 tests
 pytest tests/test_rules.py -v             # un fichier
 pytest tests/test_rules.py::TestHSTS      # une classe
 pytest -k hsts                            # par motif
@@ -210,3 +313,5 @@ pytest --lf                               # rejouer les derniers échecs
 | `test_fetch.py` | normalisation d'URL, casse des clés, redirections, 403, timeouts |
 | `test_rules.py` | les 6 règles, dont `max-age=0` classé `weak` et non `ok` |
 | `test_scoring.py` | les bornes exactes des grades (90 → A, 89 → B) et les codes de sortie |
+| `test_guards.py` | le refus des adresses privées, locales et de métadonnées cloud |
+| `test_api.py` | les routes HTTP, les codes 400/429/502 et la page servie |
