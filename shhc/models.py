@@ -62,3 +62,41 @@ class Finding:
     points: int
     reason: str
     recommendation: str | None = None
+
+
+@dataclass
+class Advice:
+    """Une recommandation redigee par le modele pour UN en-tete.
+
+    `Finding.recommendation` reste la phrase statique de secours : elle est
+    toujours produite, meme sans reseau et sans cle. `Advice` est la version
+    enrichie, qui tient compte de la VALEUR reellement observee.
+
+    Attributes:
+        header: nom canonique de l'en-tete, tel qu'il apparait dans le Finding.
+        risk: le risque concret, en une phrase, pour ce site precis.
+        action: ce qu'il faut faire, formule a l'imperatif.
+        example: la ligne d'en-tete a poser, prete a copier. None si sans objet.
+        priority: "haute", "moyenne" ou "basse".
+    """
+
+    header: str
+    risk: str
+    action: str
+    example: str | None = None
+    priority: str = "moyenne"
+
+
+@dataclass
+class AiReport:
+    """Le retour complet du modele : une synthese et des conseils cibles.
+
+    Attributes:
+        summary: deux ou trois phrases sur la posture globale du site.
+        advice: un conseil par en-tete non conforme, dans l'ordre des regles.
+        model: l'identifiant du modele qui a redige le rapport, pour tracabilite.
+    """
+
+    summary: str
+    advice: list[Advice]
+    model: str

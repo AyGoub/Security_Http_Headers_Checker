@@ -7,10 +7,26 @@ traduit les erreurs en messages lisibles et choisit le code de sortie.
 import typer
 from rich.console import Console
 
-from shhc import __version__, fetch, render, rules, scoring
+from shhc import __version__, ai, fetch, render, rules, scoring
+from shhc.models import AiReport
 
 app = typer.Typer(add_completion=False, help="Note les en-tetes de securite d'une URL.")
 err_console = Console(stderr=True)
+
+
+def _rediger(url: str, findings: list) -> AiReport | None:
+    """Demande les recommandations au modele, sans jamais faire echouer l'analyse.
+
+    L'IA est un confort, pas le coeur du produit : une cle absente ou un
+    service injoignable ne doit pas priver l'utilisateur de sa note. On
+    previent sur stderr - la sortie standard reste exploitable par un script -
+    et on retombe sur les recommandations statiques.
+    """
+    try:
+        return ai.advise(url, findings)
+    except ai.AIUnavailable as exc:
+        err_console.print(f"[yellow]Recommandations statiques :[/yellow] {exc}")
+        return None
 
 
 def _version(value: bool) -> None:
@@ -25,6 +41,9 @@ def check(
     url: str = typer.Argument(..., help="L'URL a analyser. Le https:// est optionnel."),
     as_json: bool = typer.Option(False, "--json", help="Sortie machine, sans couleurs."),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Affiche seulement le score et le grade."),
+    use_ai: bool = typer.Option(
+        True, "--ai/--no-ai", help="Fait rediger les recommandations par un modele (si SHHC_AI_KEY)."
+    ),
     version: bool = typer.Option(
         False, "--version", callback=_version, is_eager=True, help="Affiche la version et quitte."
     ),
@@ -46,12 +65,16 @@ def check(
     score_value = scoring.score(findings)
     grade_value = scoring.grade(score_value)
 
+    # `--quiet` n'affiche aucune recommandation : inutile d'appeler le modele,
+    # ce serait payer une latence pour un texte que personne ne verra.
+    report = _rediger(final_url, findings) if use_ai and not quiet else None
+
     if as_json:
-        print(render.render_json(final_url, findings, score_value, grade_value))
+        print(render.render_json(final_url, findings, score_value, grade_value, report))
     elif quiet:
         print(f"{score_value}/100 {grade_value}")
     else:
-        render.render_report(final_url, findings, score_value, grade_value)
+        render.render_report(final_url, findings, score_value, grade_value, report)
 
     raise typer.Exit(code=scoring.exit_code(grade_value))
 

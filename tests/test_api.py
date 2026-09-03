@@ -10,7 +10,7 @@ import pytest
 import respx
 from fastapi.testclient import TestClient
 
-from shhc import api
+from shhc import api, models
 
 client = TestClient(api.app)
 
@@ -93,3 +93,126 @@ def test_quota_depasse_renvoie_429():
     reponse = client.get("/api/check", params={"url": "http://127.0.0.1"})
 
     assert reponse.status_code == 429
+
+
+# --------------------------------------------------------------------------
+# Recommandations redigees par le modele
+#
+# Le point a garder : l'IA est optionnelle. Aucun de ses echecs ne doit se
+# transformer en erreur HTTP - l'analyse, elle, a reussi.
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _quota_ai_neuf():
+    api._appels_ai.clear()
+    yield
+    api._appels_ai.clear()
+
+
+@pytest.fixture
+def _site(_sans_garde):
+    """Un site sans le moindre en-tete : six findings non conformes."""
+    with respx.mock:
+        respx.get("https://exemple.test").mock(return_value=httpx.Response(200))
+        yield
+
+
+def test_sans_cle_le_rapport_part_quand_meme(_site, monkeypatch):
+    monkeypatch.delenv("SHHC_AI_KEY", raising=False)
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+
+    reponse = client.get("/api/check", params={"url": "exemple.test"})
+
+    assert reponse.status_code == 200
+    data = reponse.json()
+    assert data["ai"] is None
+    assert "cle" in data["ai_fallback"].lower()
+    # Le client a de quoi afficher : la recommandation statique est intacte.
+    assert data["findings"][0]["recommendation"]
+
+
+def test_echec_du_modele_degrade_sans_erreur(_site, monkeypatch):
+    monkeypatch.setenv("SHHC_AI_KEY", "cle-de-test")
+    monkeypatch.setattr(
+        api.ai, "advise", lambda url, findings: (_ for _ in ()).throw(api.ai.AIUnavailable("panne"))
+    )
+
+    reponse = client.get("/api/check", params={"url": "exemple.test"})
+
+    assert reponse.status_code == 200
+    assert reponse.json()["ai"] is None
+    assert reponse.json()["ai_fallback"] == "panne"
+
+
+def test_rapport_ia_dans_la_reponse(_site, monkeypatch):
+    monkeypatch.setenv("SHHC_AI_KEY", "cle-de-test")
+    monkeypatch.setattr(
+        api.ai,
+        "advise",
+        lambda url, findings: models.AiReport(
+            summary="Rien n'est configure.",
+            advice=[
+                models.Advice(
+                    header="X-Frame-Options",
+                    risk="Le site est encadrable.",
+                    action="Poser DENY.",
+                    example="X-Frame-Options: DENY",
+                    priority="haute",
+                )
+            ],
+            model="modele-de-test",
+        ),
+    )
+
+    data = client.get("/api/check", params={"url": "exemple.test"}).json()
+
+    assert data["ai_fallback"] is None
+    assert data["ai"]["model"] == "modele-de-test"
+    assert data["ai"]["advice"][0]["header"] == "X-Frame-Options"
+
+
+def test_ai_desactivable_par_parametre(_site, monkeypatch):
+    """`?ai=false` doit court-circuiter l'appel, pas seulement masquer le retour."""
+    appele = False
+
+    def _piege(url, findings):
+        nonlocal appele
+        appele = True
+        raise AssertionError("le modele ne doit pas etre sollicite")
+
+    monkeypatch.setenv("SHHC_AI_KEY", "cle-de-test")
+    monkeypatch.setattr(api.ai, "advise", _piege)
+
+    data = client.get("/api/check", params={"url": "exemple.test", "ai": "false"}).json()
+
+    assert appele is False
+    assert data["ai"] is None
+    assert data["ai_fallback"] is None
+
+
+def test_quota_ia_degrade_mais_l_analyse_continue(_site, monkeypatch):
+    """Le quota IA epuise ne renvoie PAS 429 : seul l'appel au modele saute."""
+    monkeypatch.setenv("SHHC_AI_KEY", "cle-de-test")
+    monkeypatch.setattr(
+        api.ai,
+        "advise",
+        lambda url, findings: models.AiReport(summary="", advice=[], model="modele-de-test"),
+    )
+
+    for _ in range(api.AI_RATE_LIMIT):
+        assert client.get("/api/check", params={"url": "exemple.test"}).json()["ai"] is not None
+
+    data = client.get("/api/check", params={"url": "exemple.test"}).json()
+
+    assert data["ai"] is None
+    assert "Quota IA" in data["ai_fallback"]
+
+
+def test_health_annonce_la_disponibilite_de_l_ia(monkeypatch):
+    monkeypatch.delenv("SHHC_AI_KEY", raising=False)
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    assert client.get("/api/health").json()["ai"] is False
+
+    monkeypatch.setenv("SHHC_AI_KEY", "cle-de-test")
+    assert client.get("/api/health").json()["ai"] is True

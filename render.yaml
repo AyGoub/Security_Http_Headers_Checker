@@ -9,3 +9,9 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: "3.11.9"
+      # Cle du service de redaction des recommandations. `sync: false` la
+      # laisse a saisir dans le tableau de bord Render : elle ne doit pas
+      # transiter par le depot. Sans elle, le service demarre quand meme et
+      # sert les recommandations statiques.
+      - key: SHHC_AI_KEY
+        sync: false

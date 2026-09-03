@@ -187,6 +187,49 @@
                background: var(--panel-2); padding: .1rem .3rem; border-radius: 5px; }
   .reco .none { color: var(--ok); margin: 0; }
 
+  /* ---------- recommandations rédigées par le modèle ---------- */
+  .h2row { display: flex; align-items: baseline; gap: .6rem; flex-wrap: wrap; }
+  .h2row h2 { margin-bottom: 0; }
+  .by { font-size: .74rem; color: var(--faint); text-transform: none; letter-spacing: 0; }
+  .by.static { color: var(--weak); }
+
+  .synth { color: var(--muted); font-size: .93rem; margin: 0 0 .8rem; }
+
+  .advice {
+    background: var(--panel); border: 1px solid var(--border);
+    border-left: 3px solid var(--p); border-radius: var(--radius);
+    padding: 1rem 1.2rem; margin-bottom: .6rem;
+  }
+  .advice .top { display: flex; align-items: center; gap: .55rem; flex-wrap: wrap; }
+  .advice .hdr { font-weight: 620; letter-spacing: -.01em; }
+  .advice .prio {
+    padding: .1rem .55rem; border-radius: 999px; font-size: .72rem; font-weight: 650;
+    background: color-mix(in srgb, var(--p) 16%, transparent); color: var(--p);
+  }
+  .advice .risk { color: var(--muted); font-size: .91rem; margin-top: .45rem; }
+  .advice .todo { font-size: .93rem; margin-top: .5rem; }
+  .advice .todo b { font-weight: 620; }
+
+  /* Le bloc à copier. Le bouton est frère du <pre>, pas enfant : sinon il
+     défilerait avec le contenu dès qu'une CSP dépasse la largeur. */
+  .snip { position: relative; margin-top: .7rem; }
+  .snippet {
+    margin: 0; padding: .55rem .7rem;
+    background: var(--panel-2); border: 1px solid var(--border-soft); border-radius: 8px;
+    font-family: ui-monospace, Consolas, monospace; font-size: .8rem;
+    color: var(--text); overflow-x: auto; white-space: pre; scrollbar-width: thin;
+  }
+  .copy {
+    position: absolute; top: .3rem; right: .3rem; padding: .12rem .5rem;
+    border-radius: 6px; background: var(--panel); color: var(--faint);
+    border: 1px solid var(--border); font-size: .7rem; font-weight: 600;
+    font-family: inherit; cursor: pointer; opacity: 0;
+    transition: opacity .15s, color .15s;
+  }
+  .snip:hover .copy, .copy:focus { opacity: 1; }
+  .copy:hover { color: var(--accent); }
+  @media (hover: none) { .copy { opacity: 1; } }
+
   /* squelette de chargement */
   .skel { background: var(--panel); border: 1px solid var(--border);
           border-radius: var(--radius); padding: 1.5rem; margin-bottom: .6rem; }
@@ -225,7 +268,8 @@
   <h1>Vos en-têtes de sécurité<br>tiennent-ils la route&nbsp;?</h1>
   <p class="lede">
     Six en-têtes HTTP analysés en une requête. Note sur 100, lettre A à F,
-    et la correction à appliquer pour chaque point faible.
+    et pour chaque point faible une correction rédigée à partir de la valeur
+    réellement observée.
   </p>
 
   <form id="form" autocomplete="off">
@@ -297,7 +341,10 @@ function squelette() {
     Array.from({length: n}, (_, i) =>
       `<div class="line" style="width:${[85, 55, 70][i % 3]}%"></div>`).join('')
   }</div>`;
-  return bloc(2) + bloc(3) + bloc(3);
+  // L'attente est plus longue qu'avant : au fetch s'ajoute la rédaction des
+  // recommandations. On dit ce qui se passe plutôt que de laisser deviner.
+  return bloc(2) + bloc(3) + bloc(3) +
+    `<p class="synth" style="text-align:center">Analyse en cours, puis rédaction des recommandations…</p>`;
 }
 
 function afficher(d) {
@@ -347,17 +394,7 @@ function afficher(d) {
     </article>`;
   }).join('');
 
-  const soucis = d.findings.filter(f => f.status !== 'ok');
-  const reco = `
-    <h2>Recommandations</h2>
-    <div class="reco fade">${
-      soucis.length
-        ? `<ul>${soucis.map(f =>
-            `<li><b>${esc(f.header)}</b> — ${esc(f.recommendation || '')}</li>`).join('')}</ul>`
-        : `<p class="none">Aucune : les six en-têtes sont correctement configurés.</p>`
-    }</div>`;
-
-  out.innerHTML = verdict + `<h2>Détail</h2>` + cartes + reco;
+  out.innerHTML = verdict + `<h2>Détail</h2>` + cartes + recommandations(d);
 
   // La jauge s'anime une fois le DOM en place.
   requestAnimationFrame(() => {
@@ -369,6 +406,78 @@ function afficher(d) {
   out.querySelectorAll('.val:not(.short)').forEach(el => {
     el.title = 'Cliquer pour déplier';
     el.addEventListener('click', () => el.classList.toggle('open'));
+  });
+
+  brancherCopie();
+}
+
+/* Le bloc « Recommandations ».
+ *
+ * Deux sources possibles : le modèle, quand `d.ai` est renseigné, sinon la
+ * phrase statique portée par chaque finding. La page ne suppose donc jamais
+ * que l'IA a répondu — sans clé, sans réseau ou quota épuisé, elle affiche
+ * quand même une correction, et dit d'où elle vient. */
+function recommandations(d) {
+  const soucis = d.findings.filter(f => f.status !== 'ok');
+  if (!soucis.length) {
+    return titre('Recommandations') +
+      `<div class="reco fade"><p class="none">Aucune : les six en-têtes sont correctement configurés.</p></div>`;
+  }
+
+  if (d.ai && d.ai.advice && d.ai.advice.length) {
+    const synthese = d.ai.summary ? `<p class="synth fade">${esc(d.ai.summary)}</p>` : '';
+    return titre('Recommandations', `rédigées par ${esc(d.ai.model)}`) +
+           synthese + d.ai.advice.map(carteConseil).join('');
+  }
+
+  const note = d.ai_fallback ? `recommandations types — ${esc(d.ai_fallback)}` : '';
+  return titre('Recommandations', note, true) +
+    `<div class="reco fade"><ul>${soucis.map(f =>
+      `<li><b>${esc(f.header)}</b> — ${esc(f.recommendation || '')}</li>`).join('')}</ul></div>`;
+}
+
+function titre(texte, mention = '', statique = false) {
+  return `<div class="h2row"><h2>${texte}</h2>${
+    mention ? `<span class="by${statique ? ' static' : ''}">${mention}</span>` : ''
+  }</div>`;
+}
+
+const PRIO = { haute: 'var(--missing)', moyenne: 'var(--weak)', basse: 'var(--accent)' };
+
+function carteConseil(c) {
+  const exemple = c.example ? `
+      <div class="snip">
+        <pre class="snippet">${esc(c.example)}</pre>
+        <button class="copy" type="button">copier</button>
+      </div>` : '';
+  const risque = c.risk ? `<div class="risk">${esc(c.risk)}</div>` : '';
+  return `
+    <article class="advice fade" style="--p:${PRIO[c.priority] || 'var(--weak)'}">
+      <div class="top">
+        <span class="hdr">${esc(c.header)}</span>
+        <span class="prio">${esc(c.priority)}</span>
+      </div>
+      ${risque}
+      <div class="todo"><b>À faire :</b> ${esc(c.action)}</div>
+      ${exemple}
+    </article>`;
+}
+
+/* Copie du bloc d'exemple. `navigator.clipboard` n'existe qu'en contexte
+ * sécurisé (HTTPS ou localhost) : ailleurs, on le signale plutôt que de
+ * laisser un bouton qui ne fait rien. */
+function brancherCopie() {
+  out.querySelectorAll('.copy').forEach(bouton => {
+    bouton.addEventListener('click', async () => {
+      const texte = bouton.previousElementSibling.textContent;
+      try {
+        await navigator.clipboard.writeText(texte);
+        bouton.textContent = 'copié';
+      } catch {
+        bouton.textContent = 'copie impossible';
+      }
+      setTimeout(() => { bouton.textContent = 'copier'; }, 1600);
+    });
   });
 }
 </script>
